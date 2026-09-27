@@ -29,3 +29,8 @@ tensorboard/
 
 # macOS AppleDouble metadata
 ._*
+
+# Dataset
+data/test/behavioral_cloning_data.bag
+data/train/behavioral_cloning_data.bag
+data/puzzles.csv
