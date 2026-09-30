@@ -1,0 +1,39 @@
+seed: 123
+net_name: "test"
+run_name: "You forgot to change the run name"
+
+# Encoder args
+enc_vocab_size: 32
+enc_max_sequence_length: 128
+enc_embedding_dim: 256
+enc_num_layers: 4
+enc_num_heads: 4
+enc_hidden_act: "gelu"
+enc_hidden_dropout_prob: 0.1
+enc_attention_probs_dropout_prob: 0.1
+
+# Model args
+state_dim: 256
+num_factors: 16
+factor_dim: 16
+hidden_dim: 512
+target_momentum: 0.996
+
+# Loss args
+orthogonality_weight: 1.0
+factor_activity_weight: 1.0
+encoder_variance_weight: 1.0
+
+# Train args
+train_data_dir: "data/train/behavioral_cloning_data.bag"
+test_data_dir: "data/test/behavioral_cloning_data.bag"
+epochs: 2
+optimizer: "adamW"
+beta_2: 0.95
+log_interval: 100
+learning_rate: 0.0001
+weight_decay: 0.05
+batch_size: 64
+gradient_clipping_norm: 1.0
+early_stop: 3
+pretrained_path: ""

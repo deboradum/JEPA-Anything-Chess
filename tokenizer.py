@@ -114,4 +114,4 @@ def tokenize(fen: str) -> torch.Tensor:
 
   assert len(indices) == SEQUENCE_LENGTH
 
-  return torch.tensor(indices, dtype=torch.uint32)
+  return torch.tensor(indices, dtype=torch.long)
