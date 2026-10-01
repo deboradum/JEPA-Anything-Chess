@@ -96,6 +96,9 @@ def evaluate(
             # Split back into individual board positions
             split_candidate_states = torch.split(flat_candidate_states, num_moves_per_pos)
 
+            # Counter for positions with >1 legal move
+            valid_eval_positions = 0
+
             for i in range(bs):
                 pred_state_i = pred_state[i]
                 cand_states_i = split_candidate_states[i]
@@ -111,6 +114,16 @@ def evaluate(
                 # Distances to all legal moves
                 distances = torch.norm(pred_state_i - cand_states_i, dim=-1)
 
+                # Target vs Incorrect Distances
+                target_dist = distances[target_idx_i].item()
+                incorrect_mask = torch.ones(n_moves, dtype=torch.bool, device=device)
+                incorrect_mask[target_idx_i] = False
+                incorrect_mean_dist = distances[incorrect_mask].mean().item()
+                val_metrics_sums["target_l2_dist"] += target_dist
+                val_metrics_sums["incorrect_l2_dist"] += incorrect_mean_dist
+                val_metrics_sums["distance_gap"] += (incorrect_mean_dist - target_dist)
+                valid_eval_positions += 1
+
                 # Find rank of the ground truth move (1-indexed)
                 sorted_indices = torch.argsort(distances).tolist()
                 rank = sorted_indices.index(target_idx_i) + 1
@@ -121,12 +134,21 @@ def evaluate(
                     top_1_correct += 1
 
             total_samples += bs
+            val_metrics_sums["valid_eval_positions"] += valid_eval_positions
 
     # Calculate final averages
     final_metrics_avg = {}
     if total_samples > 0:
+        valid_pos_count = val_metrics_sums.pop("valid_eval_positions", 0)
+
         for key, total_sum in val_metrics_sums.items():
-            final_metrics_avg[key] = total_sum / total_samples
+            if key in ["target_l2_dist", "incorrect_l2_dist", "distance_gap"]:
+                if valid_pos_count > 0:
+                    final_metrics_avg[key] = total_sum / valid_pos_count
+                else:
+                    final_metrics_avg[key] = 0.0
+            else:
+                final_metrics_avg[key] = total_sum / total_samples
 
         final_metrics_avg["percentile_rank"] = total_percentile_rank / total_samples
         final_metrics_avg["top_1_accuracy"] = top_1_correct / total_samples
@@ -163,6 +185,9 @@ def train(
         "val/contrast_ratio": val_metrics.get("contrast_ratio", 0.0),
         "val/percentile_rank": val_metrics.get("percentile_rank", 0.0),
         "val/top_1_accuracy": val_metrics.get("top_1_accuracy", 0.0),
+        "val/target_l2_dist": val_metrics.get("target_l2_dist", 0.0),
+        "val/incorrect_l2_dist": val_metrics.get("incorrect_l2_dist", 0.0),
+        "val/distance_gap": val_metrics.get("distance_gap", 0.0),
     })
     print(
         f"[Eval] Epoch 0 (Initial), Time: {taken:.2f}s\n"
@@ -174,7 +199,10 @@ def train(
         f"  cosine_sim:       {val_metrics.get('cosine_sim', 0.0):.4f}\n"
         f"  contrast_ratio:   {val_metrics.get('contrast_ratio', 0.0):.4f}\n"
         f"  percentile_rank:  {val_metrics.get('percentile_rank', 0.0):.2f}\n"
-        f"  top_1_accuracy: {val_metrics.get('top_1_accuracy', 0.0):.2f} \n"
+        f"  top_1_accuracy:   {val_metrics.get('top_1_accuracy', 0.0):.2f} \n"
+        f"  target_l2_dist:   {val_metrics.get('target_l2_dist', 0.0):.4f}\n"
+        f"  incorrect_l2_dist:{val_metrics.get('incorrect_l2_dist', 0.0):.4f}\n"
+        f"  distance_gap:     {val_metrics.get('distance_gap', 0.0):.4f}\n"
     )
 
     start = time.perf_counter()
@@ -210,7 +238,10 @@ def train(
                 encoder_min_std=0.1,
                 eps=1e-6,
             )
-            total_loss = objective.total
+
+            state_similarity = torch.nn.functional.cosine_similarity(context_state, target_state, dim=-1).mean()
+            temporal_loss = torch.relu(state_similarity - 0.5)
+            total_loss = objective.total + (conf.temporal_weight * temporal_loss)
 
             with torch.no_grad():
                 pred_state = net.projection.compose(pred_factors)
@@ -221,6 +252,7 @@ def train(
             running_metrics_sums["encoder_variance_loss"] += objective.encoder_variance.item() * bs
             running_metrics_sums["factor_activity_loss"] += objective.factor_activity.item() * bs
             running_metrics_sums["orthogonality_loss"] += objective.orthogonality.item() * bs
+            running_metrics_sums["temporal_loss"] += temporal_loss.item() * bs
             running_metrics_sums["total_loss"] += objective.total.item() * bs
             running_metrics_sums["cosine_sim"] += cosine_sim.mean().item() * bs
             running_metrics_sums["contrast_ratio"] += contrast_ratio.item() * bs
@@ -259,6 +291,7 @@ def train(
                     "train/encoder_variance_loss": train_metrics.get("encoder_variance_loss", 0.0),
                     "train/factor_activity_loss": train_metrics.get("factor_activity_loss", 0.0),
                     "train/orthogonality_loss": train_metrics.get("orthogonality_loss", 0.0),
+                    "train/temporal_loss": train_metrics.get("temporal_loss", 0.0),
                     "train/cosine_sim": train_metrics.get("cosine_sim", 0.0),
                     "train/contrast_ratio": train_metrics.get("contrast_ratio", 0.0),
                     "train/grad_norm_before": total_grad_norm_before / conf.log_interval,
@@ -272,6 +305,7 @@ def train(
                     f"  Enc Variance:     {train_metrics.get('encoder_variance_loss', 0.0):.4f}\n"
                     f"  Factor Activity:  {train_metrics.get('factor_activity_loss', 0.0):.4f}\n"
                     f"  Orthogonality:    {train_metrics.get('orthogonality_loss', 0.0):.4f}\n"
+                    f"  Temporal:         {train_metrics.get('temporal_loss', 0.0):.4f}\n"
                     f"  cosine_sim:       {train_metrics.get('cosine_sim', 0.0):.4f}\n"
                     f"  contrast_ratio:   {train_metrics.get('contrast_ratio', 0.0):.4f} \n"
                 )
@@ -303,6 +337,9 @@ def train(
                     "val/contrast_ratio": val_metrics.get("contrast_ratio", 0.0),
                     "val/percentile_rank": val_metrics.get("percentile_rank", 0.0),
                     "val/top_1_accuracy": val_metrics.get("top_1_accuracy", 0.0),
+                    "val/target_l2_dist": val_metrics.get("target_l2_dist", 0.0),
+                    "val/incorrect_l2_dist": val_metrics.get("incorrect_l2_dist", 0.0),
+                    "val/distance_gap": val_metrics.get("distance_gap", 0.0),
                 })
 
                 print(
@@ -317,39 +354,10 @@ def train(
                     f"  contrast_ratio:   {val_metrics.get('contrast_ratio', 0.0):.4f}\n"
                     f"  percentile_rank:  {val_metrics.get('percentile_rank', 0.0):.2f}\n"
                     f"  top_1_accuracy:   {val_metrics.get('top_1_accuracy', 0.0):.2f}\n"
+                    f"  target_l2_dist:   {val_metrics.get('target_l2_dist', 0.0):.4f}\n"
+                    f"  incorrect_l2_dist:{val_metrics.get('incorrect_l2_dist', 0.0):.4f}\n"
+                    f"  distance_gap:     {val_metrics.get('distance_gap', 0.0):.4f}\n"
                 )
-
-        # # Evaluate
-        # start = time.perf_counter()
-        # net.eval()
-        # val_metrics = evaluate(net, conf, test_loader)
-        # net.train()
-        # taken = time.perf_counter() - start
-        # wandb.log({
-        #     "epoch": epoch + 1,
-        #     "examples": global_step,
-        #     "val/total_loss": val_metrics.get("total_loss", 0.0),
-        #     "val/prediction_loss": val_metrics.get("prediction_loss", 0.0),
-        #     "val/encoder_variance_loss": val_metrics.get("encoder_variance_loss", 0.0),
-        #     "val/factor_activity_loss": val_metrics.get("factor_activity_loss", 0.0),
-        #     "val/orthogonality_loss": val_metrics.get("orthogonality_loss", 0.0),
-        #     "val/cosine_sim": val_metrics.get("cosine_sim", 0.0),
-        #     "val/contrast_ratio": val_metrics.get("contrast_ratio", 0.0),
-        #     "val/percentile_rank": val_metrics.get("percentile_rank", 0.0),
-        #     "val/top_1_accuracy": val_metrics.get("top_1_accuracy", 0.0),
-        # })
-        # print(
-        #     f"\n[Eval] Epoch {epoch + 1}/{conf.epochs}, Time: {taken:.2f}s\n"
-        #     f"  Total Loss:       {val_metrics.get('total_loss', 0.0):.4f}\n"
-        #     f"  Prediction Loss:  {val_metrics.get('prediction_loss', 0.0):.4f}\n"
-        #     f"  Enc Variance:     {val_metrics.get('encoder_variance_loss', 0.0):.4f}\n"
-        #     f"  Factor Activity:  {val_metrics.get('factor_activity_loss', 0.0):.4f}\n"
-        #     f"  Orthogonality:    {val_metrics.get('orthogonality_loss', 0.0):.4f}\n"
-        #     f"  cosine_sim:       {val_metrics.get('cosine_sim', 0.0):.4f}\n"
-        #     f"  contrast_ratio:   {val_metrics.get('contrast_ratio', 0.0):.4f}\n"
-        #     f"  percentile_rank:  {val_metrics.get('percentile_rank', 0.0):.2f}\n"
-        #     f"  top_1_accuracy: {val_metrics.get('top_1_accuracy', 0.0):.2f} \n"
-        # )
 
     return val_metrics
 

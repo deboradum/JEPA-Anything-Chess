@@ -27,6 +27,7 @@ class TrainConfig:
     orthogonality_weight: float = 1.0
     factor_activity_weight: float = 1.0
     encoder_variance_weight: float = 1.0
+    temporal_weight: float = 1.0
 
     # Train args
     train_data_dir: str = "data/train"
