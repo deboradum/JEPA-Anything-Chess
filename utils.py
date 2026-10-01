@@ -1,6 +1,10 @@
+import chess
+import torch
+
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
+import tokenizer
 from config import TrainConfig
 from model import ChessOPFModel
 from encoder import ChessEncoder
@@ -54,3 +58,39 @@ def get_dataloaders(config: TrainConfig):
     )
 
     return train_loader, test_loader
+
+
+def generate_legal_move_candidates(fen: str, target_move_uci: str | None = None):
+    """
+    Generates tokenized target states for all legal moves from a given FEN.
+
+    Args:
+        fen: The current position FEN string.
+        target_move_uci: Optional UCI string of the ground-truth move (e.g. "e2e4").
+
+    Returns:
+        candidate_tokens: Tensor of shape (num_legal_moves, 77)
+        target_idx: Index of the ground-truth move in candidate_tokens (-1 if not provided/found)
+        legal_moves: List of chess.Move objects corresponding to rows in candidate_tokens
+    """
+    board = chess.Board(fen)
+    legal_moves = list(board.legal_moves)
+
+    candidate_tokens_list = []
+    target_idx = -1
+
+    for i, move in enumerate(legal_moves):
+        uci_str = move.uci()
+        if target_move_uci is not None and uci_str == target_move_uci:
+            target_idx = i
+
+        # Push move in-place
+        board.push(move)
+        next_fen = board.fen()
+        candidate_tokens_list.append(tokenizer.tokenize(next_fen))
+        # Pop move back to restore board state
+        board.pop()
+
+    candidate_tokens = torch.stack(candidate_tokens_list, dim=0)  # Shape: (N_moves, 77)
+
+    return candidate_tokens, target_idx, legal_moves

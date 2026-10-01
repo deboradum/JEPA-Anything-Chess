@@ -21,7 +21,6 @@ class ChessDataset(Dataset):
 
     def __getitem__(self, idx):
         element = self.data_source[idx]
-
         fen, move = constants.CODERS['behavioral_cloning'].decode(element)
 
         state = _process_fen(fen)
@@ -31,4 +30,4 @@ class ChessDataset(Dataset):
         next_fen = board.fen()
         next_state = _process_fen(next_fen)
 
-        return state, next_state  # (context, target)
+        return state, next_state, fen, move

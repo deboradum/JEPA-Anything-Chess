@@ -4,7 +4,6 @@ from dataclasses import dataclass
 @dataclass
 class TrainConfig:
     seed: int = 123
-    net_name: str = "test"
     run_name: str = "You forgot to change the run name"
 
     # Encoder args
@@ -36,6 +35,7 @@ class TrainConfig:
     optimizer: str = "adamW"
     beta_2: float = 0.95
     log_interval: int = 100
+    eval_interval: int = 1000
     learning_rate: float = 0.0001
     weight_decay: float = 0.05
     batch_size: int = 64
